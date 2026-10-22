@@ -8,7 +8,11 @@
 set -euo pipefail
 
 REPO="${OPUS_MLOW_REPO:-https://github.com/edgardmessias/opus_mlow.git}"
-REF="${OPUS_MLOW_REF:-master}"
+# NO REF BY DEFAULT: clone whatever the repository calls its default branch.
+# It used to default to "master"; the fork only has "main", so a clean machine
+# got `Remote branch master not found` and no library — the build never ran
+# anywhere except where someone passed OPUS_MLOW_REF by hand.
+REF="${OPUS_MLOW_REF:-}"
 
 PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="${PKG_DIR}/vendor/opus_mlow"
@@ -22,11 +26,15 @@ esac
 ARCH="$(node -p 'process.arch' 2>/dev/null || echo "$(uname -m)")"
 OUT_DIR="${PKG_DIR}/prebuilds/${PLATFORM}-${ARCH}"
 
-echo "==> opus_mlow: ${REPO}@${REF}  ->  ${OUT_DIR}/libopus_mlow.${EXT}"
+echo "==> opus_mlow: ${REPO}@${REF:-default}  ->  ${OUT_DIR}/libopus_mlow.${EXT}"
 
 if [ ! -d "${SRC_DIR}/.git" ]; then
   rm -rf "${SRC_DIR}"
-  git clone --depth 1 --branch "${REF}" "${REPO}" "${SRC_DIR}"
+  if [ -n "${REF}" ]; then
+    git clone --depth 1 --branch "${REF}" "${REPO}" "${SRC_DIR}"
+  else
+    git clone --depth 1 "${REPO}" "${SRC_DIR}"
+  fi
 fi
 
 cmake -S "${SRC_DIR}" -B "${BUILD_DIR}" \
