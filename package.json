@@ -1,6 +1,6 @@
 {
   "name": "@raphaelvserafim/opus-mlow",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "FFI binding for the MLow (SMPL) Opus codec used by WhatsApp VoIP — 16 kHz mono, 60 ms frames.",
   "type": "module",
   "main": "index.js",
@@ -8,6 +8,7 @@
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
     "build:native": "bash scripts/build-native.sh",
+    "prepublishOnly": "node scripts/check-prebuilds.mjs",
     "deploy": "npm publish --access=public",
     "test": "node test.js"
   },

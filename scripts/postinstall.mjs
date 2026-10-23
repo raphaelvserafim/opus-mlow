@@ -20,7 +20,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const pkgDir = dirname(dirname(fileURLToPath(import.meta.url)))
 const strict = process.env.OPUS_MLOW_REQUIRE_BUILD === '1'
@@ -56,6 +56,37 @@ function fail(title, detail) {
   process.exit(strict ? 1 : 0)
 }
 
+/*
+ * `koffi` faltando NÃO é biblioteca quebrada.
+ *
+ * Só quer dizer que a checagem rodou antes de a dependência estar no lugar —
+ * acontece em layouts de install esquisitos e rodando o pacote direto de um
+ * checkout. Reprovar aí puniria uma lib perfeitamente boa; o loader acha o
+ * koffi na hora da chamada.
+ */
+const semKoffi = (error) =>
+  error?.code === 'ERR_MODULE_NOT_FOUND' && String(error.message).includes('koffi')
+
+/**
+ * A biblioteca CARREGA, e não apenas existe.
+ *
+ * `existsSync` não responde isso, e a diferença é uma ligação derrubada: um
+ * `.so` compilado contra uma glibc mais nova que a da máquina está lá, parece
+ * certo, e explode no `koffi.load` — no meio de uma chamada, que é o pior
+ * momento possível para descobrir. Quem pergunta antes de pular a compilação
+ * transforma isso em um build a mais no install.
+ */
+async function carrega() {
+  try {
+    const { MLowCodec } = await import(pathToFileURL(join(pkgDir, 'index.js')).href)
+    new MLowCodec().close()
+    return { ok: true }
+  } catch (error) {
+    if (semKoffi(error)) return { ok: true, semVerificar: true }
+    return { ok: false, motivo: String(error?.message ?? error) }
+  }
+}
+
 if (process.env.OPUS_MLOW_SKIP_BUILD) {
   say('OPUS_MLOW_SKIP_BUILD is set — not building.')
   process.exit(0)
@@ -67,8 +98,17 @@ if (process.env.OPUS_MLOW_LIB && existsSync(process.env.OPUS_MLOW_LIB)) {
 }
 
 if (existsSync(prebuild)) {
-  say(`prebuilt library for ${triple} is already here — not building.`)
-  process.exit(0)
+  const estado = await carrega()
+  if (estado.ok) {
+    const nota = estado.semVerificar ? ' (not loaded here — koffi is not installed yet)' : ''
+    say(`prebuilt library for ${triple} is already here${nota} — not building.`)
+    process.exit(0)
+  }
+  // Está lá e não serve: quase sempre glibc da máquina mais velha que a de quem
+  // publicou. Compilar por cima é a saída, e o `cp` do build sobrescreve.
+  say(`the shipped library for ${triple} does not load here (${estado.motivo}) — rebuilding it.`)
+} else {
+  say(`no prebuilt library for ${triple} — building it now (this takes a minute).`)
 }
 
 if (process.platform === 'win32') {
@@ -77,8 +117,6 @@ if (process.platform === 'win32') {
     'Build libopus_mlow.dll from the opus_mlow fork and set OPUS_MLOW_LIB to it.',
   )
 }
-
-say(`no prebuilt library for ${triple} — building it now (this takes a minute).`)
 
 const build = spawnSync('bash', [join(pkgDir, 'scripts', 'build-native.sh')], {
   cwd: pkgDir,
@@ -99,23 +137,10 @@ if (!existsSync(prebuild)) {
   fail('The build finished but left no library behind.', `Expected ${prebuild}.`)
 }
 
-try {
-  const { MLowCodec } = await import(join(pkgDir, 'index.js'))
-  new MLowCodec().close()
+const depois = await carrega()
+if (!depois.ok) fail('The library was built but does not load.', depois.motivo)
+if (depois.semVerificar) {
+  say(`built: prebuilds/${triple}/libopus_mlow.${ext} (not loaded here — koffi is not installed yet).`)
+} else {
   say(`built and loaded: prebuilds/${triple}/libopus_mlow.${ext}`)
-} catch (error) {
-  /*
-   * `koffi` missing is NOT a broken build.
-   *
-   * It only means this check ran before the dependency was in place — which
-   * happens in odd install layouts and when the package is run straight from
-   * a checkout. Failing the install there would punish a library that is
-   * perfectly fine; the loader will find koffi at call time.
-   */
-  const semKoffi = error?.code === 'ERR_MODULE_NOT_FOUND' && String(error.message).includes('koffi')
-  if (semKoffi) {
-    say(`built: prebuilds/${triple}/libopus_mlow.${ext} (not loaded here — koffi is not installed yet).`)
-  } else {
-    fail('The library was built but does not load.', String(error?.message ?? error))
-  }
 }
